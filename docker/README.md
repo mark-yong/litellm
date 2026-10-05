@@ -70,6 +70,30 @@ To stop the running containers, use the following command:
 docker compose down
 ```
 
+## Embedded LiteAdmin MCP
+
+Source builds containing embedded LiteAdmin MCP can serve it at `/admin/mcp` on the existing LiteLLM port. This capability is unreleased. Keep your existing database, master key, and proxy configuration, then add these settings to the serving container's environment:
+
+```bash
+LITELLM_ENABLE_ADMIN_MCP=true
+LITELLM_LICENSE="your-enterprise-license"
+PROXY_BASE_URL=https://gateway.example.com
+```
+
+For the unified source deployment described above, put them in its `.env` file and rebuild:
+
+```bash
+docker compose up -d --build
+```
+
+In componentized deployments, set the flag and license on the backend container and route `/admin/mcp` to the backend service. The gateway component excludes this endpoint. The unified, database, non-root, and backend image builds bundle the connector
+
+Hosting is disabled by default. Opting in requires a valid base Enterprise license; an unlicensed opt-in or invalid flag value prevents startup. Enabling it reserves `/admin`, so rename any MCP server alias called `admin` first
+
+Connect with a personal proxy-admin bearer key. Embedded responses default to `full`; selecting `LITELLM_ADMIN_RESPONSE_VIEW=compact` requires subsequent saved-result reads to reach the same worker process, including within a multi-worker pod
+
+See the [LiteAdmin MCP guide](https://docs.litellm.ai/docs/proxy/liteadmin_mcp#run-liteadmin-mcp-inside-litellm) for client configuration, tool restrictions, and verification
+
 ## Hardened / Offline Testing
 
 To ensure changes are safe for non-root, read-only root filesystems and restricted egress, always validate with the hardened compose file:
