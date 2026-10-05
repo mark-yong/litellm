@@ -111,6 +111,30 @@ _REQUIRED_HEADERS_BY_CALLBACK: Final[Mapping[str, frozenset[str]]] = MappingProx
 _NO_ATTRS: Final[Mapping[str, str]] = MappingProxyType({})
 
 
+def _arize_resource_attributes() -> Mapping[str, str]:
+    from litellm.integrations.arize.arize import ArizeLogger
+    from litellm.integrations.otel.presets.arize import arize_project_name
+
+    return MappingProxyType({"model_id": arize_project_name(ArizeLogger.get_arize_config())})
+
+
+#: Resource attributes a backend needs on every export to accept it, beyond the
+#: tenant's ``service.name``. Arize rejects a span that names no project.
+_RESOURCE_ATTRIBUTES_BY_CALLBACK: Final[Mapping[str, Callable[[], Mapping[str, str]]]] = MappingProxyType(
+    {"arize": _arize_resource_attributes}
+)
+
+
+def _resource_attributes(callback_name: str, service_name: str | None) -> Mapping[str, str]:
+    backend: Final = _RESOURCE_ATTRIBUTES_BY_CALLBACK.get(callback_name)
+    return MappingProxyType(
+        {
+            **({"service.name": service_name} if service_name else {}),
+            **(backend() if backend is not None else {}),
+        }
+    )
+
+
 def _span_scope(callback_name: str, params: StandardCallbackDynamicParams) -> OtelSpanScope:
     if callback_name != "langfuse_otel":
         return "full"
@@ -152,7 +176,7 @@ def destination_for(
     return OtelDestination(
         endpoint=endpoint,
         headers=MappingProxyType(dict(headers)),
-        resource_attributes=MappingProxyType({"service.name": service_name}) if service_name else _NO_ATTRS,
+        resource_attributes=_resource_attributes(callback_name, service_name),
         callback_name=callback_name,
         protocol=protocol,
         span_scope=_span_scope(callback_name, params),

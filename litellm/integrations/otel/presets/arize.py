@@ -12,7 +12,13 @@ from litellm.integrations.otel.model.config import (
     OpenTelemetryV2Config,
 )
 from litellm.integrations.otel.presets.utils import ensure_mappers
+from litellm.types.integrations.arize import ArizeConfig
 from litellm.types.utils import StandardCallbackDynamicParams
+
+#: Arize routes an export to a project by the ``model_id`` resource attribute and
+#: rejects one that names none, so this is the project when ``ARIZE_PROJECT_NAME``
+#: is unset.
+ARIZE_DEFAULT_PROJECT: Final = "litellm"
 
 
 class _ArizeSettings(BaseSettings):
@@ -44,12 +50,13 @@ def arize_preset(
                 ),
             ],
             "mapper_names": mappers,
-            "resource_attributes": {
-                **base.resource_attributes,
-                **({"model_id": arize_cfg.project_name} if arize_cfg.project_name else {}),
-            },
+            "resource_attributes": {**base.resource_attributes, "model_id": arize_project_name(arize_cfg)},
         }
     )
+
+
+def arize_project_name(arize_cfg: ArizeConfig) -> str:
+    return arize_cfg.project_name or ARIZE_DEFAULT_PROJECT
 
 
 def _arize_headers(arize_cfg) -> str | None:

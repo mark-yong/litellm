@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from functools import reduce
 from types import MappingProxyType
+from typing import Final
 
 import pytest
 from opentelemetry.sdk.resources import Resource
@@ -3460,3 +3461,56 @@ class TestTenantHostSsrfGuard:
                 destination_for("langfuse_otel", self._langfuse("http://10.0.0.5:3000"))
 
         assert sum("provider_url_destination_allowed_hosts" in record.message for record in caplog.records) == 1
+
+
+class TestArizeProjectRouting:
+    """Arize rejects an export that names no project (400: set x-project-name,
+    arize.project.name, openinference.project.name, or model_id), so an Arize
+    destination carries ``model_id`` the way the operator's own preset does."""
+
+    TEAM_PARAMS: Final = MappingProxyType({"arize_space_id": "space-team", "arize_api_key": "key-team"})
+
+    @pytest.fixture(autouse=True)
+    def _operator_arize(self, monkeypatch):
+        for name in ("ARIZE_SPACE_KEY", "ARIZE_ENDPOINT", "ARIZE_HTTP_ENDPOINT", "ARIZE_PROJECT_NAME"):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv("ARIZE_SPACE_ID", "space-operator")
+        monkeypatch.setenv("ARIZE_API_KEY", "key-operator")
+
+    @classmethod
+    def _team_destination(cls, service_name: str | None = None) -> OtelDestination:
+        destination: Final = destination_for("arize", dict(cls.TEAM_PARAMS), service_name=service_name)
+        assert destination is not None, "the team names a space and a key, so it must resolve"
+        return destination
+
+    def test_a_team_destination_lands_in_the_operators_arize_project(self, monkeypatch):
+        monkeypatch.setenv("ARIZE_PROJECT_NAME", "gateway-prod")
+
+        assert dict(self._team_destination().resource_attributes) == {"model_id": "gateway-prod"}
+
+    def test_a_team_destination_names_a_project_even_when_the_operator_set_none(self):
+        assert dict(self._team_destination().resource_attributes) == {"model_id": "litellm"}
+
+    def test_the_teams_service_name_rides_beside_the_project(self, monkeypatch):
+        monkeypatch.setenv("ARIZE_PROJECT_NAME", "gateway-prod")
+
+        destination = self._team_destination(service_name="team-checkout")
+
+        assert dict(destination.resource_attributes) == {"service.name": "team-checkout", "model_id": "gateway-prod"}
+
+    def test_the_operators_exporter_names_a_project_even_without_arize_project_name(self):
+        assert arize_preset().resource_attributes["model_id"] == "litellm"
+
+    def test_every_span_forwarded_to_the_team_carries_the_project(self, monkeypatch):
+        monkeypatch.setenv("ARIZE_PROJECT_NAME", "gateway-prod")
+        dest = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(TenantFanOutSpanProcessor(processor_factory=lambda _d: SimpleSpanProcessor(dest)))
+
+        def run():
+            set_request_destinations((self._team_destination(),))
+            emit(provider)
+
+        in_fresh_context(run)
+
+        assert {s.resource.attributes["model_id"] for s in dest.get_finished_spans()} == {"gateway-prod"}
